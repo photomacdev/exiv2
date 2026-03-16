@@ -297,6 +297,7 @@ int Print::printSummary() {
   printTag(exifData, Exiv2::macroMode, _("Macro mode"));
   printTag(exifData, Exiv2::imageQuality, _("Image quality"));
   printTag(exifData, Exiv2::whiteBalance, _("White balance"));
+  printTag(exifData, Exiv2::lensName, _("Lens name"));
   printTag(exifData, "Exif.Image.Copyright", _("Copyright"));
   printTag(exifData, "Exif.Photo.UserComment", _("Exif comment"));
 
@@ -863,37 +864,254 @@ int Extract::writeThumbnail() const {
   return rc;
 }  // Extract::writeThumbnail
 
-int Extract::writePreviews() const {
-  if (!Exiv2::fileExists(path_)) {
-    std::cerr << path_ << ": " << _("Failed to open the file") << "\n";
-    return -1;
-  }
 
-  auto image = Exiv2::ImageFactory::open(path_);
-  image->readMetadata();
+//========================================
+constexpr auto kMimeTypeJpeg = "image/jpeg";
+constexpr auto kMimeTypeTiff = "image/tiff";
 
-  Exiv2::PreviewManager pvMgr(*image);
-  Exiv2::PreviewPropertiesList pvList = pvMgr.getPreviewProperties();
 
-  const Params::PreviewNumbers& numbers = Params::instance().previewNumbers_;
-  for (auto number : numbers) {
-    auto num = static_cast<size_t>(number);
-    if (num == 0) {
-      // Write all previews
-      for (num = 0; num < pvList.size(); ++num) {
-        writePreviewFile(pvMgr.getPreviewImage(pvList[num]), num + 1);
-      }
-      break;
+int getExifInt(const Exiv2::ExifData& exifData, const char* keyName) {
+  try {
+    const auto key = exifData.findKey(Exiv2::ExifKey(keyName));
+    if (key != exifData.end() && key->count() > 0) {
+      return static_cast<int>(key->toInt64());
     }
-    num--;
-    if (num >= pvList.size()) {
-      std::cerr << path_ << ": " << _("Image does not have preview") << " " << num + 1 << "\n";
-      continue;
-    }
-    writePreviewFile(pvMgr.getPreviewImage(pvList[num]), num + 1);
+  } catch (...) {
   }
   return 0;
+}
+
+std::string lowerCopy(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return value;
+}
+
+std::string getExifString(const Exiv2::ExifData& exifData, const char* keyName) {
+  try {
+    const auto key = exifData.findKey(Exiv2::ExifKey(keyName));
+    if (key != exifData.end() && key->count() > 0) {
+      return key->toString();
+    }
+  } catch (...) {
+  }
+  return {};
+}
+
+const Exiv2::PreviewProperties* getPreviewPtr(int desiredSize,
+                                              Exiv2::ExifData& exivData,
+                                              const std::string& ext,
+                                              const Exiv2::PreviewPropertiesList& previewList)
+{
+  constexpr auto kExifMakerTag = "Exif.Image.Make";
+  const std::string maker = lowerCopy(getExifString(exivData, kExifMakerTag));
+  const std::string extLower = lowerCopy(ext);
+
+  const bool isLeica = maker.find("leica") != std::string::npos;
+  const bool isRawIphone = maker.find("apple") != std::string::npos && extLower == "dng";
+  static const std::set<std::string> skipTiffForExt = {"cr2", "nef"};
+
+  const Exiv2::PreviewProperties* selectedPreview = nullptr;
+  for (const auto& preview : previewList) {
+    if (preview.mimeType_ == kMimeTypeTiff && (isLeica || isRawIphone || skipTiffForExt.count(extLower) > 0)) {
+      continue;
+    }
+    const int currentSize = std::max(preview.width_, preview.height_);
+    if (desiredSize <= currentSize) {
+      selectedPreview = &preview;
+      break;
+    }
+  }
+  return selectedPreview;
+}
+
+struct TopBottomOffset {
+  size_t top{0};
+  size_t bottom{0};
+};
+
+
+bool processSelectedPreview(const Exiv2::PreviewProperties& preview,
+                            const Exiv2::PreviewProperties& bestPreview,
+                            const Exiv2::ExifData& exivData,
+                            int desiredSize,
+                            int originWidth,
+                            int originHeight,
+                            const Exiv2::PreviewManager& pm,
+                            int orientation,
+                            std::string& output) {
+  TopBottomOffset outOffset;
+  Exiv2::PreviewImage previewImg = pm.getPreviewImage(preview);
+
+  int w = preview.width_;
+  int h = preview.height_;
+  int W = originWidth;
+  int H = originHeight;
+
+
+  constexpr auto kExifImageWidthTag = "Exif.Image.ImageWidth";
+  constexpr auto kExifImageLengthTag = "Exif.Image.ImageLength";
+  constexpr auto kExifPixelXDimTag = "Exif.Photo.PixelXDimension";
+  constexpr auto kExifPixelYDimTag = "Exif.Photo.PixelYDimension";
+  if (W == 0 || H == 0) {
+    W = getExifInt(exivData, kExifImageWidthTag);
+    if (W == 0) {
+      W = getExifInt(exivData, kExifPixelXDimTag);
+    }
+    H = getExifInt(exivData, kExifImageLengthTag);
+    if (H == 0) {
+      H = getExifInt(exivData, kExifPixelYDimTag);
+    }
+  }
+
+  if (w == 0 || h == 0 || W == 0 || H == 0) {
+    return false;
+  }
+
+  float arSelectedPreview = static_cast<float>(w) / h;
+  float arImage = static_cast<float>(W) / H;
+  if (orientation == 0 && ((arSelectedPreview < 1.F && arImage > 1.F) || (arImage < 1.F && arSelectedPreview > 1.F))) {
+    return false;
+  }
+
+  const bool isHorizontalOrientated = w > h;
+  if (isHorizontalOrientated) {
+    if (bestPreview.width_ != preview.width_ && bestPreview.height_ != preview.height_) {
+      const float aspectBestPreview = static_cast<float>(bestPreview.width_) / bestPreview.height_;
+      if (aspectBestPreview > arImage) {
+        H = bestPreview.height_;
+        W = bestPreview.width_;
+        arImage = aspectBestPreview;
+      }
+    }
+
+    constexpr float kAspectRatioDiffThreshold = 0.01F;
+    if (arSelectedPreview < arImage && (arImage - arSelectedPreview) > kAspectRatioDiffThreshold) {
+      float delta = static_cast<float>(h * W - w * H) / W;
+      delta = std::ceil(delta * 0.5F) + 1.F;
+      outOffset.top = static_cast<size_t>(std::max(0.F, delta));
+      outOffset.bottom = static_cast<size_t>(std::max(0.F, delta));
+    }
+  }
+
+  int format = -1;
+  if (previewImg.mimeType() == kMimeTypeJpeg) {
+    format = 0;
+  } else if (previewImg.mimeType() == kMimeTypeTiff) {
+    format = 1;
+  } else {
+    return false;
+  }
+
+  int outWidth = preview.width_;
+  int outHeight = preview.height_;
+  if (format == 1) {
+    const size_t crop = outOffset.top + outOffset.bottom;
+    outWidth = static_cast<int>(previewImg.width());
+    outHeight = static_cast<int>(previewImg.height() > crop ? previewImg.height() - crop : 0);
+  }
+
+  const auto* data = reinterpret_cast<const char*>(previewImg.pData());
+  if (data == nullptr || previewImg.size() == 0) {
+    return false;
+  }
+
+  output.clear();
+  output.reserve(96 + previewImg.size());
+  output += std::to_string(outWidth);
+  output += '\n';
+  output += std::to_string(outHeight);
+  output += '\n';
+  output += std::to_string(orientation);
+  output += '\n';
+  output += std::to_string(format);
+  output += '\n';
+  output += std::to_string(outOffset.top);
+  output += '\n';
+  output += std::to_string(outOffset.bottom);
+  output += '\n';
+  output.append(data, previewImg.size());
+  (void)desiredSize;
+  return true;
+}
+
+
+int Extract::writePreviews() const {
+
+  // TODO: try move read preview here
+
+    Exiv2::Image::UniquePtr image;
+    try {
+      image = Exiv2::ImageFactory::open(path_.c_str());
+    } catch (...) {
+      return {};
+    }
+
+    if (!image || !image->good()) {
+      return {};
+    }
+
+    try {
+      image->readMetadata();
+    } catch (...) {
+      return {};
+    }
+
+    const auto params = Params::instance().files_;
+    if (params.size() < 4) {
+      return {};
+    }
+    int width = std::stoi(params[1]);
+    int height = std::stoi(params[2]);
+    const auto ext = params[3];
+
+    if (width <= 0 || height <= 0) {
+      return {};
+    }
+
+    Exiv2::PreviewManager pm(*image);
+    Exiv2::PreviewPropertiesList previewList;
+    try {
+      previewList = pm.getPreviewProperties();
+    } catch (...) {
+      return {};
+    }
+
+    if (previewList.empty()) {
+      return {};
+    }
+
+    Exiv2::ExifData& exivData = image->exifData();
+
+    constexpr auto kExifOrientationTag = "Exif.Image.Orientation";
+    const int orientation = getExifInt(exivData, kExifOrientationTag);
+
+    const int desiredSize = std::max(1, std::max(width, height));
+    const Exiv2::PreviewProperties* selectedPreview = getPreviewPtr(desiredSize, exivData, ext, previewList);
+    if (selectedPreview == nullptr) {
+      return {};
+    }
+
+    const int pxW = std::max(0, static_cast<int>(image->pixelWidth()));
+    const int pxH = std::max(0, static_cast<int>(image->pixelHeight()));
+    std::string output;
+    try {
+      if (!processSelectedPreview(*selectedPreview, previewList.back(), exivData, desiredSize, pxW, pxH, pm, orientation, output)) {
+        return {};
+      }
+    } catch (...) {
+      return {};
+    }
+
+    if (output.empty()) {
+      return 1;
+    }
+    std::cout.write(output.data(), static_cast<std::streamsize>(output.size()));
+    std::cout.flush();
+
+    return 0;
 }  // Extract::writePreviews
+
+//========================================
 
 int Extract::writeIccProfile(const std::string& target) const {
   int rc = 0;
