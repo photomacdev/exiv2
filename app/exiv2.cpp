@@ -115,103 +115,6 @@ bool parseLine(ModifyCmd& modifyCmd, const std::string& line, int num);
 std::string parseEscapes(const std::string& input);
 }  // namespace
 
-
-std::string readLensInfo(const std::string& filename) {
-  Exiv2::Image::UniquePtr image;
-  try {
-    image = Exiv2::ImageFactory::open(filename.c_str());
-  } catch (...) {
-    return {};
-  }
-
-  if (!image || !image->good()) {
-    return {};
-  }
-
-  try {
-    image->readMetadata();
-  } catch (...) {
-    return {};
-  }
-
-  Exiv2::ExifData& exif = image->exifData();
-
-  std::string lensPrettyName = "";
-  float focalLen = -1.0f;
-  float focusDist = -1.0f;
-  float fNumber = -1.0f;
-  int lensId = -1;
-  
-    auto lensName = Exiv2::lensName(exif);
-    if(lensName != exif.end())
-    {
-        // чаще всего lensName->toString() равно числу (lensId), а lensName->print(_metadata.exif.get()) - распознанное имя линзы в виде строки
-        //grfx::cout << "exiv2 lensType: '" << lensName->toString() << "'\n";
-        //grfx::cout << "exiv2 lensName: '" << lensName->print(exif) << "'\n";
-
-        auto typeId = lensName->typeId();
-        
-        //if(lensName->print(_metadata.exif.get()) == lensName->toString())   // может быть нераспознанное имя линзы в виде числа, такое нам не надо
-        lensPrettyName = lensName->print(&exif);
-        
-        if(typeId != Exiv2::TypeId::asciiString) // иногда lensName содержит сразу строку, а не число lensId
-            lensId = lensName->toInt64();
-    }
-
-    auto _focalLen = Exiv2::focalLength(exif);
-    if(_focalLen != exif.end())
-    {
-        //grfx::cout << "exiv2 focalLen: '" << _focalLen->toString() << "'\n";
-        // Exiv2::focalLength returns multiple values for CRW files, no one of them can be treated as focalLen
-        // For details see http://dev.exiv2.org/issues/1083
-        if (_focalLen->key() != "Exif.Canon.FocalLength")
-        {
-            focalLen = _focalLen->toFloat();
-        }
-    }
-    
-    auto _focusDist = Exiv2::subjectDistance(exif);
-    if(_focusDist != exif.end())
-    {
-        //grfx::cout << "exiv2 focusDist: '" << _focusDist->toString() << "'\n";
-        focusDist = _focusDist->toFloat();
-        // формула из darktable, так же выводит exiftool
-        // Похоже, что такие же порядки значений (до десятка единиц или 10000 для бесконечности), записаны в LCP от Adobe, несмотря на "stCamera:FocusDistance - Average focus distance in meters of the reference image set."
-        focusDist = (0.01 * std::pow(10, focusDist / 40.0));
-        focusDist = std::min(focusDist, 10000.0f);
-    }
-
-    //if(focusDist == 0)
-    //    focusDist = 10000;
-    
-    auto _fNumber = Exiv2::fNumber(exif);
-    if(_fNumber != exif.end())
-    {
-        //grfx::cout << "exiv2 fNumber: '" << _fNumber->toString() << "'\n";
-        fNumber = _fNumber->toFloat();
-    }
-
-    std::ostringstream os;
-    os << lensPrettyName << '\n' << focalLen << '\n' << focusDist << '\n' << fNumber << '\n' << lensId << '\n';
-    return os.str();
-}
-
-std::string readBinaryExif(const std::string& filename) {
-  Exiv2::Image::UniquePtr exif = Exiv2::ImageFactory::open(filename);
-  if (!exif || !exif->good()) {
-    return {};
-  }
-  exif->readMetadata();
-  Exiv2::ExifData &exifData = exif->exifData();
-
-    Exiv2::Blob blob;
-    Exiv2::ExifParser::encode(blob, Exiv2::ByteOrder::littleEndian, exifData);
-    if (blob.empty()) {
-      return {};
-    }
-    return std::string(reinterpret_cast<const char*>(blob.data()), blob.size());
-}
-
 // *****************************************************************************
 // Main
 int main(int argc, char* const argv[]) {
@@ -222,10 +125,6 @@ int main(int argc, char* const argv[]) {
 #ifdef EXV_ENABLE_BMFF
   Exiv2::enableBMFF();
 #endif
-
-  int effectiveArgc = argc;
-  char* const* effectiveArgv = argv;
-  std::vector<char*> readAllMetadataArgv;
 
 #ifdef EXV_ENABLE_NLS
   setlocale(LC_ALL, "");
@@ -241,7 +140,7 @@ int main(int argc, char* const argv[]) {
 
   // Handle command line arguments
   Params& params = Params::instance();
-  if (params.getopt(effectiveArgc, effectiveArgv)) {
+  if (params.getopt(argc, argv)) {
     params.usage();
     return 1;
   }
