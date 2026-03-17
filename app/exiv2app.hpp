@@ -222,6 +222,7 @@ class Params : public Util::Getopt {
   std::vector<std::regex> greps_;       //!< List of keys to 'grep' from the metadata
   Keys keys_;                           //!< List of keys to match from the metadata
   std::string charset_;                 //!< Charset to use for UNICODE Exif user comment
+  std::vector<std::string> params_;     //!< Additional params
 
   Exiv2::DataBuf stdinBuf;  //!< DataBuf with the binary bytes from stdin
 

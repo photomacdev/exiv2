@@ -1026,9 +1026,13 @@ int Params::nonoption(const std::string& argv) {
       action_ = Action::print;
     }
   }
-  if (!action) {
+
+  if (!action && files_.empty()) {
     files_.push_back(argv);
+  } else {
+    params_.push_back(argv);
   }
+
   return rc;
 }  // Params::nonoption
 
