@@ -1093,6 +1093,9 @@ int Extract::writePreviews() const {
     if (output.empty()) {
       return 1;
     }
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     std::cout.write(output.data(), static_cast<std::streamsize>(output.size()));
     std::cout.flush();
 
