@@ -978,7 +978,7 @@ bool processSelectedPreview(const Exiv2::PreviewProperties& preview,
       }
     }
 
-    constexpr float kAspectRatioDiffThreshold = 0.01F;
+    constexpr float kAspectRatioDiffThreshold = 0.005F;
     if (arSelectedPreview < arImage && (arImage - arSelectedPreview) > kAspectRatioDiffThreshold) {
       float delta = static_cast<float>(h * W - w * H) / W;
       delta = std::ceil(delta * 0.5F) + 1.F;
@@ -1051,7 +1051,7 @@ int Extract::writePreviews() const {
     int height = std::stoi(params[1]);
     const auto ext = params[2];
 
-    if (width <= 0 || height <= 0) {
+    if (width <= 0 && height <= 0) {
       std::cerr << "Incorrect sizes passed." << "\n";
       return -1;
     }
