@@ -527,34 +527,45 @@ bool Print::printMetadatum(const Exiv2::Metadatum& md, const Exiv2::Image* pImag
     first = false;
     std::cout << std::dec << std::setw(3) << std::setfill(' ') << std::right << md.size();
   }
+  constexpr size_t maxPrintSize = 1024 * 1024;  // 1 MB
   if (Params::instance().printItems_ & Params::prValue && md.size() > 0) {
     if (!first)
       std::cout << "  ";
     first = false;
-    std::ostringstream os;
-    // #1114 - show negative values for SByte
-    if (md.typeId() == Exiv2::signedByte) {
-      for (size_t c = 0; c < md.value().count(); c++) {
-        const auto value = md.value().toInt64(c);
-        os << (c ? " " : "") << std::dec << (value < 128 ? value : value - 256);
-      }
+    if (md.size() > maxPrintSize) {
+      std::cout << "(Binary value suppressed, " << md.size() << " bytes)";
     } else {
-      os << std::dec << md.value();
+      std::ostringstream os;
+      // #1114 - show negative values for SByte
+      if (md.typeId() == Exiv2::signedByte) {
+        for (size_t c = 0; c < md.value().count(); c++) {
+          const auto value = md.value().toInt64(c);
+          os << (c ? " " : "") << std::dec << (value < 128 ? value : value - 256);
+        }
+      } else {
+        os << std::dec << md.value();
+      }
+      binaryOutput(os);
     }
-    binaryOutput(os);
   }
   if (Params::instance().printItems_ & Params::prTrans) {
     if (!first)
       std::cout << "  ";
     first = false;
-    std::ostringstream os;
-    os << std::dec << md.print(&pImage->exifData());
-    binaryOutput(os);
+    if (md.size() > maxPrintSize) {
+      std::cout << "(Binary value suppressed, " << md.size() << " bytes)";
+    } else {
+      std::ostringstream os;
+      os << std::dec << md.print(&pImage->exifData());
+      binaryOutput(os);
+    }
   }
   if (Params::instance().printItems_ & Params::prHex) {
     if (!first)
       std::cout << std::endl;
-    if (md.size() > 0) {
+    if (md.size() > maxPrintSize) {
+      std::cout << "(Binary value suppressed, " << md.size() << " bytes)" << std::endl;
+    } else if (md.size() > 0) {
       Exiv2::DataBuf buf(md.size());
       md.copy(buf.data(), pImage->byteOrder());
       Exiv2::hexdump(std::cout, buf.c_data(), buf.size());
